@@ -30,18 +30,20 @@ export class TrackResolver {
 			throw new Error("PLAYER_DESTROYED");
 		}
 		if (stream?.remote && stream.handle) return stream;
-		if (stream?.stream) return stream;
+		if (stream?.stream || stream?.url || stream?.recreate) return stream;
 
 		stream = await this.pluginManager.getStream(track, options);
 		if (isDestroyed()) {
 			stream?.stream?.destroy?.();
 			throw new Error("PLAYER_DESTROYED");
 		}
-		if (stream?.stream) {
-			const existingAgain = options?.fresh ? null : this.streamManager.getStreamByTrack(trackId);
-			if (existingAgain && !existingAgain.destroyed) {
-				stream.stream.destroy?.();
-				return { stream: existingAgain, type: "arbitrary" };
+		if (stream?.stream || stream?.url || stream?.recreate) {
+			if (stream.stream) {
+				const existingAgain = options?.fresh ? null : this.streamManager.getStreamByTrack(trackId);
+				if (existingAgain && !existingAgain.destroyed) {
+					stream.stream.destroy?.();
+					return { stream: existingAgain, type: "arbitrary" };
+				}
 			}
 			return stream;
 		}

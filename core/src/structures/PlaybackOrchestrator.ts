@@ -144,7 +144,7 @@ export class PlaybackOrchestrator {
 				{ signal },
 			);
 			if (!isCurrentRefresh()) throw new Error("Playback resource refresh superseded");
-			if (!info?.stream && !info?.url) throw new Error("No stream available for resource refresh");
+			if (!info?.stream && !info?.url && !info?.recreate) throw new Error("No stream available for resource refresh");
 			if (info.remote) throw new Error("Cannot refresh a remote playback resource");
 			await this.bus.action({ type: "FILTER_SET_SOURCE_TYPE", streamType: info.type ?? "arbitrary" }, { signal });
 			if (!isCurrentRefresh()) throw new Error("Playback resource refresh superseded");
@@ -519,16 +519,26 @@ export class PlaybackOrchestrator {
 				if (!filtered?.stream) throw new Error("Filter controller produced no stream");
 				activeStream = filtered;
 			}
+			let streamToPlay: import("stream").Readable;
+			let inputType = activeStream.inputType;
+			if (this.o.streamController && (activeStream.stream || activeStream.url || activeStream.recreate)) {
+				const active = await this.o.streamController.replace(activeStream, x);
+				if (context.signal.aborted || !this.matchesContext(x, context)) return;
+				streamToPlay = active.stream;
+				if (active.inputType) inputType = active.inputType;
+			} else {
+				streamToPlay = activeStream.stream as import("stream").Readable;
+			}
 			const resource = this.bus.requestRpcSync<
 				{ stream: import("stream").Readable; track: Track; inputType?: import("@discordjs/voice").StreamType },
 				import("@discordjs/voice").AudioResource
 			>("resource.create", {
-				stream: activeStream.stream as import("stream").Readable,
+				stream: streamToPlay,
 				track,
-				inputType: activeStream.inputType,
+				inputType,
 			});
 			x.setResource(resource);
-			this.o.playbackController?.play(resource, x);
+			this.o.playbackController?.play(resource, x, from, track);
 			x.markPlaying(0);
 			this.bus.event({ type: "TRACK_STARTED", session: x.snapshot(), track: track ?? x.snapshot().track });
 			await this.prepareTrack(x, context);
