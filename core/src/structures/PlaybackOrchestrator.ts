@@ -3,7 +3,15 @@ import { PlaybackSession } from "./PlaybackSession";
 import { createPlayerRequestId } from "./PlayerBus";
 import { PlayerActionPriority } from "../types";
 import type { AudioResource } from "@discordjs/voice";
-import type { PlayerMessageContext, PlaybackSessionSnapshot, SearchResult, StreamInfo, Track, TrackLoadResult } from "../types";
+import type {
+	PlayerMessageContext,
+	PlaybackSessionSnapshot,
+	SearchResult,
+	StreamInfo,
+	Track,
+	TrackLoadResult,
+	TrackResolveContext,
+} from "../types";
 import type { Player } from "./Player";
 import type { TrackLoader } from "./TrackLoader";
 import type { StreamController } from "../controller/StreamController";
@@ -25,7 +33,7 @@ export interface PlaybackOrchestratorOptions {
 	transitionController?: TransitionController;
 	preloadController?: PreloadController;
 	ttsController?: TTSController;
-	relatedTrackResolver?: (track: Track) => Promise<Track[] | null | undefined>;
+	relatedTrackResolver?: (track: Track, context?: TrackResolveContext) => Promise<Track[] | null | undefined>;
 }
 
 export class PlaybackOrchestrator {
@@ -327,7 +335,7 @@ export class PlaybackOrchestrator {
 		if (!queue || !source || context.signal.aborted || !this.matchesContext(session, context) || !this.o.relatedTrackResolver)
 			return;
 		try {
-			let related = (await this.o.relatedTrackResolver(source)) ?? [];
+			let related = (await this.o.relatedTrackResolver(source, { history: this.bus.querySync("previousTracks") })) ?? [];
 			if (context.signal.aborted || !this.matchesContext(session, context)) return;
 			const upcoming = new Set(queue.snapshot().map((track) => track.id ?? track.url));
 			related = related.filter((track) => track !== source && !upcoming.has(track.id ?? track.url));

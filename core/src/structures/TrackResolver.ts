@@ -1,13 +1,8 @@
-import type { StreamInfo, Track } from "../types";
+import type { StreamInfo, Track, TrackResolveContext, TrackResolverOptions } from "../types";
 import type { StreamManager } from "./StreamManager";
 import type { PluginManager } from "../plugins";
 import type { ExtensionManager } from "../extensions";
 
-export interface TrackResolverOptions {
-	streamManager: StreamManager;
-	pluginManager: PluginManager;
-	extensionManager: ExtensionManager;
-}
 
 /** Resolves a Track through the existing extension/plugin chain without owning playback. */
 export class TrackResolver {
@@ -20,7 +15,11 @@ export class TrackResolver {
 		this.extensionManager = options.extensionManager;
 	}
 
-	public async resolve(track: Track, isDestroyed: () => boolean, options?: { fresh?: boolean }): Promise<StreamInfo | null> {
+	public async resolve(
+		track: Track,
+		isDestroyed: () => boolean,
+		options?: { fresh?: boolean; context?: TrackResolveContext },
+	): Promise<StreamInfo | null> {
 		if (isDestroyed()) throw new Error("PLAYER_DESTROYED");
 		const trackId = track.id || track.url || track.title;
 		const existing = options?.fresh ? null : this.streamManager.getStreamByTrack(trackId);

@@ -1,17 +1,9 @@
 import { BasePlugin } from "./BasePlugin";
 import { withTimeout } from "../utils/timeout";
-import type { Track, StreamInfo, SearchResult, VideoResolveOptions } from "../types";
+import type { Track, StreamInfo, SearchResult, VideoResolveOptions, TrackResolveContext, PluginManagerOptions } from "../types";
 import type { PlayerManager } from "../structures/PlayerManager";
 import type { Player } from "../structures/Player";
 import { StreamManager } from "../structures/StreamManager";
-
-type PluginManagerOptions = {
-	extractorTimeout: number | undefined;
-	maxFallbackAttempts?: number;
-	enableCache?: boolean;
-	searchCacheTTL?: number;
-	searchMinScore?: number;
-};
 
 export { BasePlugin } from "./BasePlugin";
 
@@ -309,9 +301,11 @@ interface StreamCacheEntry {
 
 export class PluginManager {
 	private options: PluginManagerOptions;
-	private player: Player;
-	private manager: PlayerManager;
+	private player?: Player;
+	private manager?: PlayerManager;
 	private plugins: Map<string, BasePlugin> = new Map();
+	private pluginRegistrationIndex: Map<string, number> = new Map();
+	private registrationCounter = 0;
 	private streamCache: Map<string, StreamCacheEntry> = new Map();
 	private searchCache: Map<string, SearchCacheEntry> = new Map();
 	private readonly STREAM_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
@@ -319,20 +313,46 @@ export class PluginManager {
 	private pendingSearches: Map<string, Promise<SearchResult | null>> = new Map(); // Dedupe search requests
 	private streamManager?: StreamManager;
 
-	constructor(player: Player, manager: PlayerManager, options: PluginManagerOptions) {
-		this.player = player;
-		this.manager = manager;
-		this.options = {
-			maxFallbackAttempts: 3,
-			enableCache: true,
-			searchMinScore: 30,
-			searchCacheTTL: 2 * 60 * 1000, // 2 minutes
-			...options,
-		};
+	constructor(options?: PluginManagerOptions);
+	constructor(player?: Player | null, manager?: PlayerManager | null, options?: PluginManagerOptions);
+	constructor(
+		playerOrOptions?: Player | PluginManagerOptions | null,
+		manager?: PlayerManager | null,
+		options?: PluginManagerOptions,
+	) {
+		const isLegacyCall =
+			playerOrOptions &&
+			(manager !== undefined ||
+				(typeof playerOrOptions === "object" && ("guildId" in (playerOrOptions as any) || "bus" in (playerOrOptions as any))));
+
+		if (isLegacyCall) {
+			this.player = (playerOrOptions as Player) ?? undefined;
+			this.manager = manager ?? undefined;
+			this.options = {
+				maxFallbackAttempts: 3,
+				enableCache: true,
+				searchMinScore: 30,
+				searchCacheTTL: 2 * 60 * 1000, // 2 minutes
+				...options,
+			};
+		} else {
+			const opts = (playerOrOptions as PluginManagerOptions) || {};
+			this.player = undefined;
+			this.manager = undefined;
+			this.options = {
+				maxFallbackAttempts: 3,
+				enableCache: true,
+				searchMinScore: 30,
+				searchCacheTTL: 2 * 60 * 1000, // 2 minutes
+				...opts,
+			};
+		}
 	}
 
 	debug(message?: any, ...optionalParams: any[]): void {
-		if (this.manager?.debugEnabled) {
+		if (this.options.debug) {
+			this.options.debug(message, ...optionalParams);
+		} else if (this.manager?.debugEnabled) {
 			this.manager.emit("debug", `[Plugins] ${message}`, ...optionalParams);
 		}
 	}
@@ -340,6 +360,8 @@ export class PluginManager {
 	register(plugin: BasePlugin): void {
 		if (this.plugins.has(plugin.name)) {
 			this.debug(`Overwriting existing plugin: ${plugin.name}`);
+		} else {
+			this.pluginRegistrationIndex.set(plugin.name, this.registrationCounter++);
 		}
 		plugin.priority ??= 0;
 		this.plugins.set(plugin.name, plugin);
@@ -348,6 +370,7 @@ export class PluginManager {
 
 	unregister(name: string): boolean {
 		const removed = this.plugins.delete(name);
+		this.pluginRegistrationIndex.delete(name);
 		if (removed) this.debug(`Unregistered plugin: ${name}`);
 		return removed;
 	}
@@ -357,10 +380,17 @@ export class PluginManager {
 	}
 
 	getAll(): BasePlugin[] {
-		return Array.from(this.plugins.values()).sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+		return Array.from(this.plugins.values()).sort((a, b) => {
+			const priorityDiff = (b.priority ?? 0) - (a.priority ?? 0);
+			if (priorityDiff !== 0) return priorityDiff;
+			const indexA = this.pluginRegistrationIndex.get(a.name) ?? 0;
+			const indexB = this.pluginRegistrationIndex.get(b.name) ?? 0;
+			return indexA - indexB;
+		});
 	}
 
 	findPlugin(query: string): BasePlugin | undefined {
+		if (!query || typeof query !== "string") return undefined;
 		for (const plugin of this.getAll()) {
 			if (plugin.name && query.toLowerCase().includes(plugin.name.toLowerCase())) {
 				return plugin;
@@ -371,6 +401,8 @@ export class PluginManager {
 
 	clear(): void {
 		this.plugins.clear();
+		this.pluginRegistrationIndex.clear();
+		this.registrationCounter = 0;
 		this.streamCache.clear();
 		this.searchCache.clear();
 		this.pendingStreams.clear();
@@ -790,9 +822,7 @@ export class PluginManager {
 		// =========================================================
 		// FALLBACK PLUGINS
 		// =========================================================
-		const fallbackPlugins = this.getAll()
-			.filter((p) => p !== primary && p.name !== primary.name)
-			.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+		const fallbackPlugins = this.getAll().filter((p) => p !== primary && p.name !== primary.name);
 
 		if (fallbackPlugins.length === 0) {
 			this.debug(`[Stream] No fallback plugins available`);
@@ -859,18 +889,37 @@ export class PluginManager {
 
 		return null;
 	}
-	async getStream(track: Track, options?: { fresh?: boolean }): Promise<StreamInfo | null> {
+	async getStream(track: Track, options?: { fresh?: boolean; context?: TrackResolveContext }): Promise<StreamInfo | null> {
 		if (!track) {
 			this.debug(`[getStream] No track provided`);
 			return null;
 		}
 
-		let primary = this.get(track.source);
-		if (!primary) {
-			primary = this.findPlugin(track.url);
+		// Step 1: Check provenance (Track.source)
+		let primary: BasePlugin | undefined;
+		if (track.source) {
+			primary = this.get(track.source);
+			if (primary) {
+				this.debug(`[getStream] Using source plugin for track provenance: ${primary.name}`);
+			}
 		}
+
+		// Step 2: Fallback candidate resolution if no source or source not registered
 		if (!primary) {
-			this.debug(`[getStream] No plugin found for track: ${track.title}`);
+			if (track.url) {
+				primary = this.findPlugin(track.url);
+			}
+			if (!primary) {
+				const candidates = this.getAll();
+				primary = candidates[0];
+			}
+			if (primary) {
+				this.debug(`[getStream] Using candidate plugin: ${primary.name}`);
+			}
+		}
+
+		if (!primary) {
+			this.debug(`[getStream] No plugin available for track: ${track.title}`);
 			return null;
 		}
 
@@ -880,28 +929,29 @@ export class PluginManager {
 
 	hasStreamCandidate(track: Track): boolean {
 		if (!track) return false;
-		if (this.get(track.source)) return true;
+		if (track.source && this.get(track.source)) return true;
 		const query = track.url || track.title || track.source;
-		if (!query) return false;
-		return !!this.findPlugin(query);
+		if (query && this.findPlugin(query)) return true;
+		return this.getAll().some((p) => typeof p.getStream === "function" || typeof p.getFallback === "function");
 	}
 
-	async getRelatedTracks(track: Track): Promise<Track[]> {
+	async getRelatedTracks(track: Track, context?: TrackResolveContext | { history?: Track[] } | Track[]): Promise<Track[]> {
 		if (!track) return [];
 
 		const timeoutMs = this.options.extractorTimeout ?? 15000;
 		const limit = 20;
 		const minSimilarityScore = 10;
 
-		const relatedPlugins = this.getAll()
-			.filter((p) => typeof p.getRelatedTracks === "function")
-			.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+		const relatedPlugins = this.getAll().filter((p) => typeof p.getRelatedTracks === "function");
 
 		if (relatedPlugins.length === 0) {
 			return [];
 		}
 
-		const history = this.player?.previousTracks || [];
+		const history =
+			(Array.isArray(context) ? context
+			: context?.history ? context.history
+			: this.player?.previousTracks) || [];
 		const historyUrls = new Set(history.map((t: Track) => t.url));
 		const recentAuthors = new Set(
 			history

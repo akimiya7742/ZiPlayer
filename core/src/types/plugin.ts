@@ -1,4 +1,28 @@
 import type { SearchResult, StreamInfo, Track } from ".";
+import type { StreamManager } from "../structures/StreamManager";
+import type { PluginManager } from "../plugins";
+import type { ExtensionManager } from "../extensions";
+
+export type PluginManagerOptions = {
+	extractorTimeout?: number;
+	maxFallbackAttempts?: number;
+	enableCache?: boolean;
+	searchCacheTTL?: number;
+	searchMinScore?: number;
+	debug?: (message?: any, ...optionalParams: any[]) => void;
+};
+
+export interface TrackResolveContext {
+	history?: Track[];
+	signal?: AbortSignal;
+	[key: string]: any;
+}
+
+export interface TrackResolverOptions {
+	streamManager: StreamManager;
+	pluginManager: PluginManager;
+	extensionManager: ExtensionManager;
+}
 
 export interface RelatedTracksOptions {
 	limit?: number;

@@ -267,7 +267,7 @@ export class PlayerRuntimeController {
 			transitionController,
 			preloadController,
 			ttsController,
-			relatedTrackResolver: (track) => pluginManager.getRelatedTracks(track),
+			relatedTrackResolver: (track, ctx) => pluginManager.getRelatedTracks(track, ctx ?? { history: player.previousTracks }),
 		});
 		const searchController = new SearchController({ extensionManager, pluginManager, debug, bus: this.bus });
 		const debugTracer = new PlayerEventDebug(this.bus, guildId, debug, manager.debugLevel ?? "info");
