@@ -13,8 +13,6 @@ export interface PlayerBusLatencyRecord {
 	readonly timestamp: number;
 }
 
-const LEVEL = 6;
-
 function nowMs(): number {
 	return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
 }
@@ -84,5 +82,3 @@ function formatUs(value: number): string {
 	if (value < 1000) return `${value.toFixed(1)}µs`;
 	return `${(value / 1000).toFixed(2)}ms`;
 }
-
-export const PLAYER_BUS_TIME_LEVEL = LEVEL;
