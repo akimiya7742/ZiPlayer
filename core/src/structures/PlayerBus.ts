@@ -21,6 +21,7 @@ import type {
 } from "../types";
 
 import { PlayerActionPriority } from "../types/bus";
+import type { PlayerBusLatencyTrace } from "../controller/PlayerBusLatencyTrace";
 
 export type {
 	PlayerAction,
@@ -111,7 +112,12 @@ export class PlayerBus {
 	private readonly queryHandlers = new Map<PlayerQuery, Set<PlayerQueryHandler<any>>>();
 	private readonly rpcHandlers = new Map<string, RpcHandler<any, any>>();
 	private readonly pendingRequests = new Set<() => void>();
+	private latencyTrace?: PlayerBusLatencyTrace;
 	private disposed = false;
+
+	public setLatencyTrace(trace?: PlayerBusLatencyTrace): void {
+		this.latencyTrace = trace;
+	}
 
 	public emitInput(event: PlayerInput): void {
 		if (!this.disposed) this.dispatch(this.inputListeners, event.type, event);
@@ -233,7 +239,10 @@ export class PlayerBus {
 			signal: options.signal ?? new AbortController().signal,
 			timestamp: Date.now(),
 		};
-		const operation = Promise.resolve().then(() => handler(request, context));
+		const start = this.latencyTrace?.enabled ? this.latencyTrace.start() : 0;
+		const operation = Promise.resolve().then(() => handler(request, context)).finally(() => {
+			if (this.latencyTrace?.enabled) this.latencyTrace.record("rpc", type, start, { requestId, handler: handler.name || "anonymous" });
+		});
 		if (options.timeoutMs === undefined) return operation;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const timeout = new Promise<never>((_, reject) => {
@@ -259,10 +268,15 @@ export class PlayerBus {
 			signal: new AbortController().signal,
 			timestamp: Date.now(),
 		};
-		const value = handler(request, context);
-		if (value && typeof (value as any).then === "function")
-			throw new Error(`RPC "${type}" is asynchronous; use requestRpc() instead`);
-		return value as TResponse;
+		const start = this.latencyTrace?.enabled ? this.latencyTrace.start() : 0;
+		try {
+			const value = handler(request, context);
+			if (value && typeof (value as any).then === "function")
+				throw new Error(`RPC "${type}" is asynchronous; use requestRpc() instead`);
+			return value as TResponse;
+		} finally {
+			if (this.latencyTrace?.enabled) this.latencyTrace.record("rpc", type, start, { requestId: context.requestId, handler: handler.name || "anonymous" });
+		}
 	}
 
 	public registerRpc<TRequest, TResponse>(type: string, handler: RpcHandler<TRequest, TResponse>): () => void {
@@ -283,9 +297,35 @@ export class PlayerBus {
 			source: context?.source,
 			timestamp: context?.timestamp ?? Date.now(),
 		};
-		return Promise.all([...this.actionListeners].map((handler) => Promise.resolve().then(() => handler(action, execution)))).then(
-			() => undefined,
-		);
+		const start = this.latencyTrace?.enabled ? this.latencyTrace.start() : 0;
+		const handlerDurations: number[] = [];
+		return Promise.all(
+			[...this.actionListeners].map((handler) => {
+				const handlerStart = this.latencyTrace?.enabled ? this.latencyTrace.start() : 0;
+				return Promise.resolve()
+					.then(() => handler(action, execution))
+					.finally(() => {
+						if (this.latencyTrace?.enabled) {
+							const duration = this.latencyTrace.record("action", action.type, handlerStart, {
+								requestId: execution.requestId,
+								sessionId: execution.sessionId,
+								source: execution.source,
+								handler: handler.name || "anonymous",
+							});
+							handlerDurations.push(duration);
+						}
+					});
+			}),
+		).then(() => {
+			if (this.latencyTrace?.enabled) {
+				this.latencyTrace.record("action", action.type, start, {
+					requestId: execution.requestId,
+					sessionId: execution.sessionId,
+					source: execution.source,
+					handler: `criticalPath=${Math.max(0, ...handlerDurations).toFixed(1)}µs`,
+				});
+			}
+		});
 	}
 	public onAction(handler: (action: PlayerAction, context: PlayerActionExecutionContext) => void | Promise<void>): () => void {
 		this.actionListeners.add(handler);
@@ -312,16 +352,25 @@ export class PlayerBus {
 	public query<K extends PlayerQuery>(query: K): Promise<PlayerQueryMap[K]> {
 		if (this.disposed) return Promise.resolve(undefined as any);
 		const handler = [...(this.queryHandlers.get(query) ?? [])][0] as PlayerQueryHandler<K> | undefined;
-		return Promise.resolve(handler ? handler() : (undefined as any));
+		if (!handler) return Promise.resolve(undefined as any);
+		const start = this.latencyTrace?.enabled ? this.latencyTrace.start() : 0;
+		return Promise.resolve(handler()).finally(() => {
+			if (this.latencyTrace?.enabled) this.latencyTrace.record("query", query, start, { handler: handler.name || "anonymous" });
+		});
 	}
 	public querySync<K extends PlayerQuery>(query: K): PlayerQueryMap[K] {
 		if (this.disposed) return undefined as any;
 		const handler = [...(this.queryHandlers.get(query) ?? [])][0] as PlayerQueryHandler<K> | undefined;
 		if (!handler) return undefined as any;
-		const value = handler();
-		if (value && typeof (value as any).then === "function")
-			throw new Error(`Query "${query}" is asynchronous; use query() instead`);
-		return value as PlayerQueryMap[K];
+		const start = this.latencyTrace?.enabled ? this.latencyTrace.start() : 0;
+		try {
+			const value = handler();
+			if (value && typeof (value as any).then === "function")
+				throw new Error(`Query "${query}" is asynchronous; use query() instead`);
+			return value as PlayerQueryMap[K];
+		} finally {
+			if (this.latencyTrace?.enabled) this.latencyTrace.record("query", query, start, { handler: handler.name || "anonymous" });
+		}
 	}
 	public clear(): void {
 		for (const cancel of [...this.pendingRequests]) cancel();
@@ -336,6 +385,7 @@ export class PlayerBus {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.clear();
+		this.latencyTrace = undefined;
 	}
 
 	private toEvent<K extends PlayerEventType>(type: K, args: PlayerEventArgsMap[K]): Extract<PlayerEvent, { type: K }> {
