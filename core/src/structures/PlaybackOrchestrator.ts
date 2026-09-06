@@ -30,7 +30,6 @@ export interface PlaybackOrchestratorOptions {
 
 export class PlaybackOrchestrator {
 	private session: PlaybackSession | null = null;
-	private autoplayPreparation: Promise<void> | null = null;
 	private refreshSequence = 0;
 	private refreshAbortController: AbortController | null = null;
 	private trackEndTransition = false;
@@ -51,6 +50,8 @@ export class PlaybackOrchestrator {
 			const session = event.session;
 			if (!session || session.status === "ended" || session.status === "stopped") return;
 			if (!this.session || this.session.id !== session.id) return;
+			if (this.trackEndTransition) return;
+			this.trackEndTransition = true;
 			void this.advanceAfterTrackEnd(session);
 		});
 		this.detachQueueEnd = bus.subscribe("queueEnd", () => {
@@ -173,7 +174,6 @@ export class PlaybackOrchestrator {
 		for (const d of this.detachRpcs) d();
 		this.session?.destroy();
 		this.session = null;
-		this.autoplayPreparation = null;
 		this.trackEndTransition = false;
 		this.waitingForQueue = false;
 		this.queueStartPromise = null;
@@ -341,20 +341,22 @@ export class PlaybackOrchestrator {
 				});
 		}
 	}
-	private async prepareAutoplay(session: PlaybackSession, context: PlayerMessageContext): Promise<void> {
+	private async prepareAutoplay(session: PlaybackSession, context: PlayerMessageContext): Promise<Track | null> {
 		const queue = this.o.queueController;
-		if (!queue?.autoPlay || context.signal.aborted || !this.matchesContext(session, context)) return;
+		if (!queue?.autoPlay || context.signal.aborted || !this.matchesContext(session, context)) return null;
 		if (queue.loop === "track") {
 			queue.clearWillNext();
-			return;
+			return null;
 		}
 		const related = queue.relatedTracks;
-		if (!related.length) return;
+		if (!related.length) return null;
 		const pool = related.slice(0, Math.min(5, related.length));
 		const next = queue.nextTrack ?? pool[Math.floor(Math.random() * pool.length)];
-		if (!next || !this.matchesContext(session, context)) return;
-		queue.setWillNext(next);
+		if (!next || !this.matchesContext(session, context)) return null;
 		if (this.o.preloadController) await this.requestPreload(next, context);
+		if (context.signal.aborted || !this.matchesContext(session, context)) return null;
+		queue.setWillNext(next);
+		return next;
 	}
 	private async prepareTrack(session: PlaybackSession, context: PlayerMessageContext): Promise<void> {
 		await this.prepareRelated(session, context);
@@ -385,12 +387,16 @@ export class PlaybackOrchestrator {
 	}
 
 	private async advanceAfterTrackEnd(snapshot: ReturnType<PlaybackSession["snapshot"]>) {
-		if (this.trackEndTransition) return;
-		if (!this.session || this.session.id !== snapshot.id || this.session.status === "ended" || this.session.status === "stopped")
+		if (
+			!this.session ||
+			this.session.id !== snapshot.id ||
+			this.session.status === "ended" ||
+			this.session.status === "stopped"
+		) {
+			this.trackEndTransition = false;
 			return;
-		this.trackEndTransition = true;
+		}
 		try {
-			await this.autoplayPreparation;
 			if (!this.session || this.session.id !== snapshot.id || !this.session.isActive()) return;
 			const from = this.session.track;
 			const endedSession = this.session;
@@ -401,32 +407,29 @@ export class PlaybackOrchestrator {
 				timestamp: Date.now(),
 				priority: PlayerActionPriority.NORMAL,
 			};
-			if (this.o.queueController?.autoPlay && !this.o.queueController.willNext) {
-				const autoplayPreparation = this.prepareAutoplay(endedSession, context);
-				this.autoplayPreparation = autoplayPreparation;
-				await autoplayPreparation;
-				if (this.autoplayPreparation === autoplayPreparation) this.autoplayPreparation = null;
-			}
-			endedSession.markEnded();
 			let next = await this.nextThroughBus(false, context);
 			if (next) {
+				endedSession.markEnded();
 				this.waitingForQueue = false;
 				await this.start(next, context, from);
 				return;
 			}
 			if (this.o.queueController?.autoPlay) {
-				next = this.o.queueController.willNext;
-				if (next) {
+				const candidate = await this.prepareAutoplay(endedSession, context);
+				if (candidate && this.session?.id === snapshot.id && this.session.isActive()) {
+					endedSession.markEnded();
 					this.o.queueController.clearWillNext();
-					this.o.queueController.add(next);
-					const queuedNext = await this.nextThroughBus(false, context);
-					if (queuedNext) {
+					if (!this.o.queueController.nextTrack) this.o.queueController.add(candidate);
+					next = await this.nextThroughBus(false, context);
+					if (next) {
 						this.waitingForQueue = false;
-						await this.start(queuedNext, context, from);
+						await this.start(next, context, from);
 						return;
 					}
 				}
 			}
+			if (!this.session || this.session.id !== snapshot.id || !this.session.isActive()) return;
+			endedSession.markEnded();
 			this.stopPlayback(context.signal);
 			this.publishState();
 			this.waitingForQueue = true;
@@ -497,11 +500,8 @@ export class PlaybackOrchestrator {
 				x.setResource(null);
 				await loaded.stream.handle.play();
 				x.markPlaying(0);
-				const autoplayPreparation = this.prepareTrack(x, context);
-				this.autoplayPreparation = autoplayPreparation;
 				this.bus.event({ type: "TRACK_STARTED", session: x.snapshot(), track: track ?? x.snapshot().track });
-				await autoplayPreparation;
-				if (this.autoplayPreparation === autoplayPreparation) this.autoplayPreparation = null;
+				await this.prepareTrack(x, context);
 				return;
 			}
 			const filterString = await this.bus.query("filterString");
@@ -522,11 +522,8 @@ export class PlaybackOrchestrator {
 			x.setResource(resource);
 			this.o.playbackController?.play(resource, x);
 			x.markPlaying(0);
-			const autoplayPreparation = this.prepareTrack(x, context);
-			this.autoplayPreparation = autoplayPreparation;
 			this.bus.event({ type: "TRACK_STARTED", session: x.snapshot(), track: track ?? x.snapshot().track });
-			await autoplayPreparation;
-			if (this.autoplayPreparation === autoplayPreparation) this.autoplayPreparation = null;
+			await this.prepareTrack(x, context);
 		} catch (error) {
 			if (!context.signal.aborted && this.matchesContext(x, context))
 				this.bus.event({

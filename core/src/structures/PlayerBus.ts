@@ -240,9 +240,12 @@ export class PlayerBus {
 			timestamp: Date.now(),
 		};
 		const start = this.latencyTrace?.enabled ? this.latencyTrace.start() : 0;
-		const operation = Promise.resolve().then(() => handler(request, context)).finally(() => {
-			if (this.latencyTrace?.enabled) this.latencyTrace.record("rpc", type, start, { requestId, handler: handler.name || "anonymous" });
-		});
+		const operation = Promise.resolve()
+			.then(() => handler(request, context))
+			.finally(() => {
+				if (this.latencyTrace?.enabled)
+					this.latencyTrace.record("rpc", type, start, { requestId, handler: handler.name || "anonymous" });
+			});
 		if (options.timeoutMs === undefined) return operation;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const timeout = new Promise<never>((_, reject) => {
@@ -275,7 +278,8 @@ export class PlayerBus {
 				throw new Error(`RPC "${type}" is asynchronous; use requestRpc() instead`);
 			return value as TResponse;
 		} finally {
-			if (this.latencyTrace?.enabled) this.latencyTrace.record("rpc", type, start, { requestId: context.requestId, handler: handler.name || "anonymous" });
+			if (this.latencyTrace?.enabled)
+				this.latencyTrace.record("rpc", type, start, { requestId: context.requestId, handler: handler.name || "anonymous" });
 		}
 	}
 
@@ -316,16 +320,18 @@ export class PlayerBus {
 						}
 					});
 			}),
-		).then(() => {
-			if (this.latencyTrace?.enabled) {
-				this.latencyTrace.record("action", action.type, start, {
-					requestId: execution.requestId,
-					sessionId: execution.sessionId,
-					source: execution.source,
-					handler: `criticalPath=${Math.max(0, ...handlerDurations).toFixed(1)}µs`,
-				});
-			}
-		});
+		)
+			.finally(() => {
+				if (this.latencyTrace?.enabled) {
+					this.latencyTrace.record("action", action.type, start, {
+						requestId: execution.requestId,
+						sessionId: execution.sessionId,
+						source: execution.source,
+						handler: `criticalPath=${Math.max(0, ...handlerDurations).toFixed(1)}µs`,
+					});
+				}
+			})
+			.then(() => undefined);
 	}
 	public onAction(handler: (action: PlayerAction, context: PlayerActionExecutionContext) => void | Promise<void>): () => void {
 		this.actionListeners.add(handler);
