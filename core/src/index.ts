@@ -15,6 +15,7 @@ export { AntiStuckController } from "./controller/AntiStuckController";
 export { TransitionController } from "./controller/TransitionController";
 export { PreloadController } from "./controller/PreloadController";
 export { SaveController } from "./controller/SaveController";
+export { PlayerBusLatencyTrace } from "./controller/PlayerBusLatencyTrace";
 
 export type {
 	PlayerAction as PlayerActionMessage,
