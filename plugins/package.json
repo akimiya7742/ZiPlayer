@@ -1,6 +1,6 @@
 {
 	"name": "@ziplayer/plugin",
-	"version": "0.3.8",
+	"version": "1.0.0",
 	"description": "A modular Discord voice player with plugin system",
 	"keywords": [
 		"ZiPlayer",
@@ -26,7 +26,8 @@
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsc --watch",
-		"prepare": "npm run build"
+		"prepare": "npm run build",
+		"test:sabr-recreate": "tsx ./test-sabr-recreate.ts"
 	},
 	"dependencies": {
 		"@zibot/scdl": "^0.1.5",
@@ -40,12 +41,15 @@
 		"music-metadata": "^11.12.3",
 		"spotify-url-info": "^3.3.0",
 		"youtubei.js": "^18.0.0",
-		"ziplayer": "^0.3.13"
+		"ziplayer": "^1.0.0"
 	},
 	"devDependencies": {
 		"@types/jsdom": "^27.0.0",
 		"@types/mime-types": "^3.0.1",
-		"@types/node": "^20.0.0",
+		"@types/node": "^20.19.43",
 		"typescript": "^5.0.0"
+	},
+	"allowScripts": {
+		"ffmpeg-static": true
 	}
 }

@@ -1,7 +1,8 @@
 import { BasePlugin, Track, SearchResult, StreamInfo, Player } from "ziplayer";
+import { EnabledTrackTypes } from "googlevideo/utils";
 
 import { Innertube, Log, UniversalCache, Platform, type Types } from "youtubei.js";
-import { createSabrStream, DEFAULT_SABR_OPTIONS } from "./utils/sabr-stream-factory.js";
+import { createSabrStream, createSabrVideoStream } from "./utils/sabr-stream-factory.js";
 import { webStreamToNodeStream } from "./utils/stream-converter.js";
 import { mintYouTubePoToken } from "./utils/youtube-botguard.js";
 import { Readable } from "stream";
@@ -68,7 +69,7 @@ export class YouTubePlugin extends BasePlugin {
 	 * const plugin = new YouTubePlugin();
 	 * // Plugin is ready to use after initialization completes
 	 */
-	constructor(options: PluginOptions) {
+	constructor(options?: PluginOptions) {
 		super();
 		this.player = options?.player ?? undefined;
 		this.options = options ?? {};
@@ -452,18 +453,18 @@ export class YouTubePlugin extends BasePlugin {
 		if (!id) throw new Error("Invalid track id");
 
 		try {
-			this.debug("🚀 Attempting youtubei.js download with BotGuard");
-			return await this.downloadWithYoutubei(track, id, signal);
-		} catch (youtubeError: any) {
+			this.debug("🚀 Attempting SABR download");
+			return await this.downloadWithSabr(track, id, signal);
+		} catch (sabrError: any) {
 			if (signal?.aborted) {
 				throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
 			}
 
-			this.debug("⚠️ youtubei.js WebPO direct stream failed, trying SABR:", youtubeError);
+			this.debug("⚠️ SABR stream failed, trying outubei.js download with BotGuard:", sabrError);
 
 			try {
-				return await this.downloadWithSabr(track, id, signal);
-			} catch (sabrError: any) {
+				return await this.downloadWithYoutubei(track, id, signal);
+			} catch (youtubeError: any) {
 				if (signal?.aborted) {
 					throw signal.reason ?? new DOMException("The operation was aborted", "AbortError");
 				}
@@ -481,7 +482,7 @@ export class YouTubePlugin extends BasePlugin {
 					}
 				}
 
-				throw sabrError;
+				throw youtubeError;
 			}
 		}
 	}
@@ -576,6 +577,7 @@ export class YouTubePlugin extends BasePlugin {
 	}
 	private async downloadWithSabr(track: Track, id: string, signal?: AbortSignal): Promise<StreamInfo> {
 		const { stream, format } = await this.getSabrDL(track, id, signal);
+		const expectedId = track.id || this.extractVideoId(track.url);
 
 		return {
 			stream,
@@ -614,7 +616,13 @@ export class YouTubePlugin extends BasePlugin {
 		this.debug(`Expected: "${expectedTitle}"`);
 		this.debug(`Actual: "${actualTitle}"`);
 
-		const sabrOptions = { ...DEFAULT_SABR_OPTIONS };
+		const sabrOptions = {
+			preferWebM: true,
+			preferOpus: true,
+			audioQuality: "medium",
+			enabledTrackTypes: EnabledTrackTypes.AUDIO_ONLY,
+		};
+
 		const { stream, title, format } = await createSabrStream(id, this.client, sabrOptions, signal);
 
 		this.debug("✅ Sabr download successful, stream ready");
@@ -738,6 +746,32 @@ export class YouTubePlugin extends BasePlugin {
 		} catch (e: any) {
 			throw new Error(`YouTube fallback search failed: ${e?.message || e}`);
 		}
+	}
+
+	async getVideo(track: Track, signal?: AbortSignal): Promise<StreamInfo> {
+		if (!track?.url && !track?.id) throw new Error("Track must have a URL or ID");
+		const plugin = this as any;
+		plugin.throwIfAborted?.(signal);
+		await plugin.ready;
+		plugin.throwIfAborted?.(signal);
+		const id = track.id || plugin.extractVideoId(track.url);
+		if (!id) throw new Error("Invalid YouTube video id");
+		plugin.debug("🎬 Resolving YouTube video through SABR:", id);
+		const result = await createSabrVideoStream(id, plugin.client, undefined, signal);
+		plugin.throwIfAborted?.(signal);
+		plugin.debug("✅ YouTube SABR video stream ready:", result.format);
+		return {
+			stream: result.stream,
+			type: "arbitrary",
+			metadata: {
+				...track.metadata,
+				title: result.title,
+				itag: result.format.itag,
+				mime: result.format.mimeType,
+				contentLength: result.format.contentLength,
+				mediaType: "video",
+			},
+		};
 	}
 
 	private extractVideoId(input: string): string | null {

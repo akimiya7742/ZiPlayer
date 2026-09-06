@@ -1,4 +1,34 @@
 import type { SearchResult, StreamInfo, Track } from ".";
+import type { StreamManager } from "../structures/StreamManager";
+import type { PluginManager } from "../plugins";
+import type { ExtensionManager } from "../extensions";
+
+export type PluginManagerOptions = {
+	extractorTimeout?: number;
+	maxFallbackAttempts?: number;
+	enableCache?: boolean;
+	searchCacheTTL?: number;
+	searchMinScore?: number;
+	debug?: (message?: any, ...optionalParams: any[]) => void;
+};
+
+export interface TrackResolveContext {
+	history?: Track[];
+	signal?: AbortSignal;
+	[key: string]: any;
+}
+
+export interface TrackResolverOptions {
+	streamManager: StreamManager;
+	pluginManager: PluginManager;
+	extensionManager: ExtensionManager;
+}
+
+export interface RelatedTracksOptions {
+	limit?: number;
+	offset?: number;
+	history?: Track[];
+}
 /**
  * Plugin interface
  *
@@ -16,7 +46,9 @@ export interface SourcePlugin {
 	canHandle(query: string): boolean;
 	search(query: string, requestedBy: string): Promise<SearchResult>;
 	getStream(track: Track, signal?: AbortSignal): Promise<StreamInfo>;
-	getRelatedTracks?(track: Track, opts?: { limit?: number; offset?: number }): Promise<Track[]>;
+	/** Optional direct video resolver. Plugins that only expose audio can omit it. */
+	getVideo?(track: Track, signal?: AbortSignal): Promise<StreamInfo>;
+	getRelatedTracks?(track: Track, opts?: RelatedTracksOptions): Promise<Track[]>;
 	validate?(url: string): boolean;
 	extractPlaylist?(url: string, requestedBy: string): Promise<Track[]>;
 	getFallback?(track: Track, signal?: AbortSignal): Promise<StreamInfo>;
@@ -58,3 +90,7 @@ export type SourcePluginLike = SourcePlugin | SourcePluginCtor;
  *   extractorTimeout: 10000
  * };
  */
+
+export type VideoResolveOptions = {
+	signal?: AbortSignal;
+};

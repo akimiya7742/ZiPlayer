@@ -1,4 +1,4 @@
-import { SourcePlugin, Track, SearchResult, StreamInfo } from "../types";
+import { SourcePlugin, Track, SearchResult, StreamInfo, RelatedTracksOptions } from "../types";
 
 export abstract class BasePlugin implements SourcePlugin {
 	abstract name: string;
@@ -9,11 +9,14 @@ export abstract class BasePlugin implements SourcePlugin {
 	abstract search(query: string, requestedBy: string): Promise<SearchResult>;
 	abstract getStream(track: Track, signal?: AbortSignal): Promise<StreamInfo>;
 
+	/** Optional direct video resolver for plugins that expose video media. */
+	getVideo?(track: Track, signal?: AbortSignal): Promise<StreamInfo>;
+
 	getFallback?(track: Track, signal?: AbortSignal): Promise<StreamInfo> {
 		throw new Error("getFallback not implemented");
 	}
 
-	getRelatedTracks?(trackURL: Track, opts?: { limit?: number; offset?: number; history?: Track[] }): Promise<Track[]> {
+	getRelatedTracks?(trackURL: Track, opts?: RelatedTracksOptions): Promise<Track[]> {
 		return Promise.resolve([]);
 	}
 

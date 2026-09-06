@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { Queue } = require("../core/dist");
+const { Queue, PlayerAction, PlayerBus } = require("../core/dist");
 
 function makeTrack(id = "t1", title = "Track 1") {
 	return {
@@ -42,6 +42,21 @@ test("Queue next, history and currentTrack", () => {
 	assert.equal(q.previousTracks.length, 1);
 	assert.equal(q.previousTracks[0].id, "a");
 	assert.equal(q.nextTrack, null);
+});
+
+test("Queue restores a cancelled next operation", () => {
+	const q = new Queue();
+	const current = makeTrack("current");
+	const next = makeTrack("next");
+	q.setCurrentTrack(current);
+	q.add(next);
+
+	assert.equal(q.next().id, "next");
+	q.restoreNext(current, next);
+
+	assert.equal(q.currentTrack.id, "current");
+	assert.deepEqual(q.previousTracks, []);
+	assert.equal(q.nextTrack.id, "next");
 });
 
 test("Queue loop track repeats current", () => {
@@ -90,4 +105,57 @@ test("Queue willNextTrack setter/getter", () => {
 	assert.equal(q.willNextTrack(), null);
 	q.willNextTrack(t);
 	assert.equal(q.willNextTrack().id, "hint");
+});
+
+test("Queue restores bounded valid state and matches tracks without ids by URL", () => {
+	const q = new Queue();
+	const original = makeTrack("original");
+	const sameUrl = { ...original, id: undefined };
+
+	q.fromJSON({
+		tracks: [sameUrl, null, "invalid"],
+		current: null,
+		history: [original, null],
+		loopMode: "invalid",
+		autoPlay: "yes",
+	});
+
+	assert.equal(q.size, 1);
+	assert.equal(q.indexOf(original), 0);
+	assert.equal(q.previousTracks.length, 1);
+	assert.equal(q.getLoopMode(), "off");
+	assert.equal(q.autoPlay(), false);
+});
+
+test("PlayerAction serializes normal actions", async () => {
+	const bus = new PlayerBus();
+	const actionExecutor = new PlayerAction(bus);
+	const order = [];
+	bus.onAction(async (action) => {
+		order.push(`${action.type}:start`);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		order.push(`${action.type}:end`);
+	});
+
+	await Promise.all([actionExecutor.enqueue({ type: "PLAY" }), actionExecutor.enqueue({ type: "PLAY" })]);
+	assert.deepEqual(order, ["PLAY:start", "PLAY:end", "PLAY:start", "PLAY:end"]);
+	actionExecutor.dispose();
+});
+
+test("PlayerAction serializes critical actions", async () => {
+	const bus = new PlayerBus();
+	const actionExecutor = new PlayerAction(bus);
+	const order = [];
+	bus.onAction(async (action) => {
+		order.push(`${action.type}:start`);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		order.push(`${action.type}:end`);
+	});
+
+	const first = actionExecutor.enqueue({ type: "SKIP" });
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	const second = actionExecutor.enqueue({ type: "STOP" });
+	await Promise.all([first, second]);
+	assert.deepEqual(order, ["SKIP:start", "SKIP:end", "STOP:start", "STOP:end"]);
+	actionExecutor.dispose();
 });
