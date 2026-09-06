@@ -1,5 +1,6 @@
 import type { PlayerBus, PlayerEvent, PlayerAction, PlayerEventType } from "../structures/PlayerBus";
 import { describeEvent, traceEvent } from "./PlayerEventTrace";
+import { PlayerBusLatencyTrace } from "./PlayerBusLatencyTrace";
 import type { PlayerDebugLevel, PlayerEventDebugLogger } from "../types";
 
 const DEBUG_PRIORITY: Record<PlayerDebugLevel, number> = {
@@ -9,12 +10,14 @@ const DEBUG_PRIORITY: Record<PlayerDebugLevel, number> = {
 	info: 3,
 	debug: 4,
 	verbose: 5,
+	time: 6,
 };
 
 /** Verbose diagnostics for the complete PlayerBus pipeline. */
 export class PlayerEventDebug {
 	private readonly detach: Array<() => void> = [];
 	private readonly recent = new Map<string, number>();
+	private readonly latencyTrace: PlayerBusLatencyTrace;
 	private level: PlayerDebugLevel;
 
 	constructor(
@@ -24,6 +27,8 @@ export class PlayerEventDebug {
 		level: PlayerDebugLevel = "info",
 	) {
 		this.level = level;
+		this.latencyTrace = new PlayerBusLatencyTrace(logger, level);
+		this.bus.setLatencyTrace(this.latencyTrace);
 		const eventTypes: PlayerEventType[] = [
 			"initialized",
 			"ready",
@@ -70,12 +75,14 @@ export class PlayerEventDebug {
 
 	public setDebugLevel(level: PlayerDebugLevel): void {
 		this.level = level;
+		this.latencyTrace.setDebugLevel(level);
 	}
 
 	dispose() {
 		this.log("info", "DETACHED");
 		for (const detach of this.detach.splice(0)) detach();
 		this.recent.clear();
+		if (this.bus) this.bus.setLatencyTrace(undefined);
 	}
 
 	private event(event: PlayerEvent) {
