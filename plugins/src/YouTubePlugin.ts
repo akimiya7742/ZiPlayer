@@ -69,7 +69,7 @@ export class YouTubePlugin extends BasePlugin {
 	 * const plugin = new YouTubePlugin();
 	 * // Plugin is ready to use after initialization completes
 	 */
-	constructor(options: PluginOptions) {
+	constructor(options?: PluginOptions) {
 		super();
 		this.player = options?.player ?? undefined;
 		this.options = options ?? {};
