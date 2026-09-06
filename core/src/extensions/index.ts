@@ -361,7 +361,9 @@ export class ExtensionManager {
 
 					if (result) {
 						const isRemote = (result as StreamInfo).remote;
-						const hasStream = !!(result as StreamInfo).stream;
+						const hasStream = Boolean(
+							(result as StreamInfo).stream || (result as StreamInfo).url || (result as StreamInfo).recreate,
+						);
 						const hasHandle = !!(result as StreamInfo).handle;
 
 						this.debug(

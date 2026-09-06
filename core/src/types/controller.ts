@@ -11,6 +11,7 @@ import type { AntiStuckController } from "../controller/AntiStuckController";
 export interface ConnectionControllerOptions {
 	guildId: string;
 	bus: PlayerBus;
+	audioPlayer?: AudioPlayer;
 	options?: Pick<PlayerOptions, "selfDeaf" | "selfMute">;
 	debug?: (message: string) => void;
 	readyTimeoutMs?: number;

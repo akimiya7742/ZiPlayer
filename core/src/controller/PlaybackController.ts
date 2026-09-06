@@ -242,7 +242,7 @@ export class PlaybackController {
 	 * so this is a fade transition rather than a true two-source crossfade.
 	 */
 	private fadeTransition(
-		_oldResource: AudioResource,
+		oldResource: AudioResource,
 		newResource: AudioResource,
 		plan: { enabled: boolean; durationMs: number },
 		session?: PlaybackSession,
@@ -250,11 +250,13 @@ export class PlaybackController {
 	): void {
 		this.fadeGain = 0;
 		this.volume?.applyLoudness(newResource, track, 0);
-		const wait = this.transitions?.beatWaitMs(session?.track ?? null, session?.position ?? 0) ?? 0;
+		const outgoingTrack = this.activeSession?.track ?? (oldResource.metadata as Track | undefined) ?? null;
+		const outgoingPosition = this.activeSession?.position ?? 0;
+		const wait = this.transitions?.beatWaitMs(outgoingTrack, outgoingPosition) ?? 0;
 		const begin = () => {
 			this.transitionTimer = null;
 			if (session && !session.isActive()) {
-				this.fadeGain = null;
+				this.cancelFade();
 				return;
 			}
 			this.fadeGain = 0;
@@ -272,18 +274,27 @@ export class PlaybackController {
 				const p = Math.min(1, (Date.now() - start) / Math.max(1, plan.durationMs));
 				this.fadeGain = p;
 				this.volume?.applyLoudness(newResource, track, p);
-				if (p >= 1) this.cancelFade();
+				if (p >= 1) {
+					this.cancelFade();
+					this.volume?.applyLoudness(newResource, track, 1);
+				}
 			}, 25);
 		};
 		if (wait > 0) this.transitionTimer = setTimeout(begin, wait);
 		else begin();
 	}
-	private cancelFade() {
+	private cancelFade(): void {
 		if (this.fadeTimer) {
 			clearInterval(this.fadeTimer);
 			this.fadeTimer = null;
 		}
-		this.fadeGain = null;
+		if (this.fadeGain !== null) {
+			this.fadeGain = null;
+			if (this.activeResource) {
+				const track = this.activeSession?.track ?? (this.activeResource.metadata as Track | undefined);
+				this.volume?.applyLoudness(this.activeResource, track, 1);
+			}
+		}
 	}
 	private cancelTransition() {
 		if (this.transitionTimer) {

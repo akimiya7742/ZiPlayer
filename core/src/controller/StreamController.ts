@@ -1,6 +1,6 @@
 import { createAudioResource, type AudioResource, type StreamType } from "@discordjs/voice";
 import type { StreamInfo, Track, ActiveStream, StreamControllerOptions, PlayerAction } from "../types";
-import type { Readable } from "stream";
+import { Readable } from "stream";
 import type { PlaybackSession } from "../structures/PlaybackSession";
 import type { StreamManager } from "../structures/StreamManager";
 import type { PlayerBus } from "../structures/PlayerBus";
@@ -23,7 +23,46 @@ export class StreamController {
 	}
 	async resolve(info: StreamInfo, session: PlaybackSession): Promise<Readable> {
 		if (!session.isActive()) throw this.abortError();
-		if (info.stream) return info.stream;
+
+		// 1. stream?: Readable
+		if (info.stream && !info.stream.destroyed && (info.stream as any).readable !== false) {
+			return info.stream;
+		}
+
+		// 2. url?: string
+		if (info.url) {
+			try {
+				if (/^https?:\/\//i.test(info.url)) {
+					const response = await fetch(info.url, { signal: session.signal });
+					if (!response.ok || !response.body) {
+						throw new Error(`Failed to fetch stream from URL (${response.status} ${response.statusText}): ${info.url}`);
+					}
+					if (!session.isActive()) throw this.abortError();
+					return Readable.fromWeb(response.body as any);
+				}
+				const fs = await import("fs");
+				const filePath = info.url.startsWith("file://") ? new URL(info.url) : info.url;
+				if (fs.existsSync(filePath)) {
+					if (!session.isActive()) throw this.abortError();
+					return fs.createReadStream(filePath);
+				}
+				throw new Error(`File URL not found: ${info.url}`);
+			} catch (urlError) {
+				if (!session.isActive() || this.isAbortError(urlError)) throw this.abortError();
+				// Fallback to recreate if URL fails and recreate is available
+				if (info.recreate) {
+					const stream = await info.recreate(info.position ?? 0);
+					if (!session.isActive()) {
+						stream.destroy();
+						throw this.abortError();
+					}
+					return stream;
+				}
+				throw urlError;
+			}
+		}
+
+		// 3. recreate?: (position: number) => Promise<Readable>
 		if (info.recreate) {
 			const stream = await info.recreate(info.position ?? 0);
 			if (!session.isActive()) {
@@ -32,7 +71,9 @@ export class StreamController {
 			}
 			return stream;
 		}
-		throw new Error("StreamInfo does not contain a readable stream or recreate factory");
+
+		// 4. false / fail
+		throw new Error("StreamInfo does not contain a readable stream, url, or recreate factory");
 	}
 	async replace(info: StreamInfo, session: PlaybackSession): Promise<ActiveStream> {
 		const stream = await this.resolve(info, session);
@@ -98,6 +139,9 @@ export class StreamController {
 		this.detachAction?.();
 		this.abortCurrent();
 		this.active = null;
+	}
+	private isAbortError(error: unknown): boolean {
+		return error instanceof Error && (error.name === "AbortError" || error.message.toLowerCase().includes("abort"));
 	}
 	private abortError() {
 		const error = new Error("Playback stream operation was aborted");

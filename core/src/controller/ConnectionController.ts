@@ -1,4 +1,12 @@
-import { VoiceConnection, VoiceConnectionStatus, entersState, joinVoiceChannel, getVoiceConnection } from "@discordjs/voice";
+import {
+	VoiceConnection,
+	VoiceConnectionStatus,
+	entersState,
+	joinVoiceChannel,
+	getVoiceConnection,
+	type AudioPlayer,
+	type PlayerSubscription,
+} from "@discordjs/voice";
 import type { PlayerOptions, VoiceChannel, PlayerConnectionInput, ConnectionControllerOptions } from "../types";
 import { PlayerBus, createPlayerSessionId, type PlayerRequestId, type PlayerSessionId } from "../structures/PlayerBus";
 
@@ -16,12 +24,15 @@ export class ConnectionController {
 	private channel: VoiceChannel | null = null;
 	private sessionId: PlayerSessionId | null = null;
 	private requestId: PlayerRequestId | null = null;
+	private audioPlayer: AudioPlayer | null = null;
+	private subscription: PlayerSubscription | null = null;
 	private disposed = false;
 	private operation: Promise<void> = Promise.resolve();
 
 	public constructor(options: ConnectionControllerOptions) {
 		this.guildId = options.guildId;
 		this.bus = options.bus;
+		this.audioPlayer = options.audioPlayer ?? null;
 		this.selfDeaf = options.options?.selfDeaf ?? true;
 		this.selfMute = options.options?.selfMute ?? false;
 		this.debug = options.debug;
@@ -44,12 +55,67 @@ export class ConnectionController {
 	public get activeSessionId(): PlayerSessionId | null {
 		return this.sessionId;
 	}
+	public get activeSubscription(): PlayerSubscription | null {
+		return this.subscription;
+	}
+	public get isReady(): boolean {
+		return this.connection?.state.status === VoiceConnectionStatus.Ready;
+	}
+	public get isSubscribed(): boolean {
+		return Boolean(this.subscription && this.isReady);
+	}
+
+	public setAudioPlayer(audioPlayer: AudioPlayer | null): void {
+		if (this.audioPlayer === audioPlayer) return;
+		this.cleanupSubscription();
+		this.audioPlayer = audioPlayer;
+		if (this.connection && this.connection.state.status === VoiceConnectionStatus.Ready) {
+			this.ensureSubscription(this.connection);
+		}
+	}
+
+	public ensureSubscription(connection: VoiceConnection | null = this.connection): PlayerSubscription | null {
+		if (this.disposed || !connection || !this.audioPlayer) {
+			this.cleanupSubscription();
+			return null;
+		}
+		if (connection.state.status !== VoiceConnectionStatus.Ready) {
+			return null;
+		}
+		if (this.subscription && this.subscription.connection !== connection) {
+			this.cleanupSubscription();
+		}
+		const currentSub = (connection.state as { subscription?: PlayerSubscription }).subscription;
+		if (this.subscription && currentSub === this.subscription) {
+			return this.subscription;
+		}
+		try {
+			this.subscription?.unsubscribe();
+			this.subscription = connection.subscribe(this.audioPlayer) ?? null;
+			this.debug?.(`[ConnectionController] AudioPlayer subscribed guild=${this.guildId}`);
+		} catch (error) {
+			this.debug?.(`[ConnectionController] AudioPlayer subscription failed guild=${this.guildId}: ${this.errorMessage(error)}`);
+			this.subscription = null;
+		}
+		return this.subscription;
+	}
+
+	public cleanupSubscription(): void {
+		if (this.subscription) {
+			try {
+				this.subscription.unsubscribe();
+			} catch {}
+			this.subscription = null;
+			this.debug?.(`[ConnectionController] AudioPlayer unsubscribed guild=${this.guildId}`);
+		}
+	}
 
 	public async dispose(): Promise<void> {
 		if (this.disposed) return;
 		this.disposed = true;
 		this.unsubscribe();
 		await this.operation.catch(() => undefined);
+		this.cleanupSubscription();
 		const connection = this.connection;
 		this.connection = null;
 		this.channel = null;
@@ -83,10 +149,12 @@ export class ConnectionController {
 				this.channel?.id === event.channel.id &&
 				this.connection.state.status === VoiceConnectionStatus.Ready
 			) {
+				this.ensureSubscription(this.connection);
 				this.emitConnected(event.requestId, sessionId, event.channel, this.connection);
 				return;
 			}
 
+			this.cleanupSubscription();
 			this.connection?.destroy();
 			this.connection = null;
 			const existing = getVoiceConnection(this.guildId);
@@ -100,6 +168,12 @@ export class ConnectionController {
 				selfMute: this.selfMute,
 			});
 			this.connection = connection;
+
+			connection.on(VoiceConnectionStatus.Ready, () => {
+				if (this.connection !== connection) return;
+				this.ensureSubscription(connection);
+			});
+
 			connection.on(VoiceConnectionStatus.Disconnected, async () => {
 				if (this.connection !== connection) return;
 				try {
@@ -113,6 +187,7 @@ export class ConnectionController {
 			});
 			connection.once(VoiceConnectionStatus.Destroyed, () => {
 				if (this.connection !== connection) return;
+				this.cleanupSubscription();
 				this.connection = null;
 				this.bus.emitOutput({
 					type: "[Connection]->[Player]:disconnected",
@@ -124,12 +199,15 @@ export class ConnectionController {
 
 			await entersState(connection, VoiceConnectionStatus.Ready, this.readyTimeoutMs);
 			if (this.disposed || this.sessionId !== sessionId || this.connection !== connection) {
+				this.cleanupSubscription();
 				connection.destroy();
 				return;
 			}
+			this.ensureSubscription(connection);
 			this.emitConnected(event.requestId, sessionId, event.channel, connection);
 		} catch (error) {
 			if (this.sessionId !== sessionId) return;
+			this.cleanupSubscription();
 			this.connection?.destroy();
 			this.connection = null;
 			this.bus.emitOutput({
@@ -146,6 +224,7 @@ export class ConnectionController {
 		if (this.disposed) return;
 		const sessionId = this.sessionId ?? createPlayerSessionId();
 		const connection = this.connection;
+		this.cleanupSubscription();
 		this.connection = null;
 		this.channel = null;
 		this.sessionId = null;
@@ -171,6 +250,7 @@ export class ConnectionController {
 
 	private async reconnect(event: Extract<PlayerConnectionInput, { type: "[Player]->[Connection]:reconnect" }>): Promise<void> {
 		if (this.disposed) return;
+		this.cleanupSubscription();
 		this.connection?.destroy();
 		this.connection = null;
 		this.channel = null;

@@ -186,7 +186,7 @@ export class PreloadManager {
 			this.destroyStreamInfo(streamInfo);
 			throw new Error("PRELOAD_CANCELLED");
 		}
-		if (!streamInfo?.stream && !streamInfo?.url) {
+		if (!streamInfo?.stream && !streamInfo?.url && !streamInfo?.recreate) {
 			if (this.removeTrackFromQueue?.(track)) this.debugLog(`[Preload] Removed unplayable track from queue: ${track.title}`);
 			throw new Error("No stream available");
 		}
@@ -200,7 +200,8 @@ export class PreloadManager {
 			:	null;
 		this.preloadSlot.streamId = streamId;
 		try {
-			const resource = createAudioResource(streamInfo.stream || streamInfo.url!, {
+			const preloadInput = streamInfo.stream || streamInfo.url || (await streamInfo.recreate!(0));
+			const resource = createAudioResource(preloadInput, {
 				inlineVolume: true,
 				metadata: { ...track, preloaded: true },
 			});

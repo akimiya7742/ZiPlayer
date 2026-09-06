@@ -1,4 +1,4 @@
-import type { AudioPlayer, PlayerSubscription } from "@discordjs/voice";
+import type { AudioPlayer } from "@discordjs/voice";
 import { createAudioPlayer, NoSubscriberBehavior } from "@discordjs/voice";
 import type { PlayerOptions, TrackMiddleware, StreamInfo, PlayerInput } from "../types";
 import type { PlayerManager } from "./PlayerManager";
@@ -90,13 +90,13 @@ export class PlayerRuntimeController {
 			: options.trackMiddleware ? [options.trackMiddleware]
 			: []),
 		];
-		const connectionController = new ConnectionController({ guildId, bus: this.bus, options, debug });
+		const audioPlayer = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause, maxMissedFrames: 100 } });
+		this.audioPlayer = audioPlayer;
+		const connectionController = new ConnectionController({ guildId, bus: this.bus, audioPlayer, options, debug });
 		const lifecycleController = new LifecycleController({ bus: this.bus, options, debug });
 		const forwardController = new ForwardController(player, { bus: this.bus, debug });
 		const queue = new Queue();
 		this.queue = queue;
-		const audioPlayer = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause, maxMissedFrames: 100 } });
-		this.audioPlayer = audioPlayer;
 		const streamManager = new StreamManager({
 			maxConcurrentStreams: options.maxStreamStore ?? 4,
 			streamTimeout: 5 * 60 * 1000,
@@ -332,21 +332,15 @@ export class PlayerRuntimeController {
 		debug: (...args: any[]) => void,
 		guildId: string,
 	): void {
-		let audioPlayerSubscription: PlayerSubscription | null = null;
 		const detachConnected = this.bus.onOutput("[Connection]->[Player]:connected", (event) => {
-			if (player.connection === event.connection) return;
-			audioPlayerSubscription?.unsubscribe();
-			audioPlayerSubscription = event.connection.subscribe(audioPlayer) ?? null;
 			ttsController.setConnection(event.connection);
 			player.connection = event.connection;
-			debug(`[Player] AudioPlayer subscribed guild=${guildId} session=${event.sessionId}`);
+			debug(`[Player] Connection set guild=${guildId} session=${event.sessionId}`);
 		});
 		const detachDisconnected = this.bus.onOutput("[Connection]->[Player]:disconnected", (event) => {
-			audioPlayerSubscription?.unsubscribe();
-			audioPlayerSubscription = null;
 			ttsController.setConnection(null);
 			player.connection = null;
-			debug(`[Player] AudioPlayer unsubscribed guild=${guildId} reason=${event.reason ?? "unknown"}`);
+			debug(`[Player] Connection cleared guild=${guildId} reason=${event.reason ?? "unknown"}`);
 		});
 		const detachResourceRefresh = this.bus.onInput("[Player]->[Resource]:refresh", (event) => {
 			void this.handleResourceRefresh(event);
@@ -355,8 +349,6 @@ export class PlayerRuntimeController {
 			detachConnected();
 			detachDisconnected();
 			detachResourceRefresh();
-			audioPlayerSubscription?.unsubscribe();
-			audioPlayerSubscription = null;
 			player.connection = null;
 		});
 		if (Array.isArray(options.filters) && options.filters.length > 0)
