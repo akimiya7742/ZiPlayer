@@ -193,9 +193,8 @@ export class FilterController {
 		// Readable, keep the legacy pipe-based seek path for backwards compatibility.
 		// A pipe cannot seek at the input level, so FFmpeg must receive the stream
 		// from the beginning and seek after input processing, as the old implementation did.
-		const source: Readable | string | null = hasSeek
-			? streamInfo.url || streamInfo.stream || null
-			: streamInfo.stream || streamInfo.url || null;
+		const source: Readable | string | null =
+			hasSeek ? streamInfo.url || streamInfo.stream || null : streamInfo.stream || streamInfo.url || null;
 		if (!source) {
 			if (hasSeek) throw new Error("Cannot seek stream: resolver did not provide a stream, seekable URL, or recreate(position)");
 			throw new Error("No source stream or URL available");
@@ -213,12 +212,7 @@ export class FilterController {
 			return result;
 		}
 
-		const candidates = [
-			this.options.ffmpegPath,
-			process.env.FFMPEG_PATH,
-			ffmpegStaticPath,
-			"ffmpeg",
-		];
+		const candidates = [this.options.ffmpegPath, process.env.FFMPEG_PATH, ffmpegStaticPath, "ffmpeg"];
 		const executable =
 			candidates.find((path) => {
 				if (!path) return false;

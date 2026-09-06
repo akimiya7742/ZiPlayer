@@ -3,7 +3,6 @@ import type { StreamManager } from "./StreamManager";
 import type { PluginManager } from "../plugins";
 import type { ExtensionManager } from "../extensions";
 
-
 /** Resolves a Track through the existing extension/plugin chain without owning playback. */
 export class TrackResolver {
 	private readonly streamManager: StreamManager;

@@ -66,11 +66,7 @@ export class PlayerBusLatencyTrace {
 }
 
 function formatRecord(record: PlayerBusLatencyRecord): string {
-	const parts = [
-		`kind=${record.kind}`,
-		`type=${record.type}`,
-		`duration=${formatUs(record.durationUs)}`,
-	];
+	const parts = [`kind=${record.kind}`, `type=${record.type}`, `duration=${formatUs(record.durationUs)}`];
 	if (record.handler) parts.push(`handler=${record.handler}`);
 	if (record.requestId) parts.push(`request=${record.requestId}`);
 	if (record.sessionId) parts.push(`session=${record.sessionId}`);
